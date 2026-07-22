@@ -161,9 +161,24 @@
       const url = `/simulators/${encodeURIComponent(this.udid)}/schemes`
         + `?q=${encodeURIComponent(fragment)}`;
       fetch(url, { headers: { accept: 'application/json' } })
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then((body) => {
+        .then((r) => r.text().then((text) => ({ ok: r.ok, status: r.status, text })))
+        .then(({ ok, status, text }) => {
           if (seq !== this._seq) return;           // superseded; drop it
+          const body = parseJSON(text);
+          if (!ok) {
+            // Completion failing is normally not worth interrupting for,
+            // but a 404 means the feature is simply absent from this
+            // build — silence there reads as "no apps registered".
+            this._renderList([]);
+            if (status === 404) {
+              this._say(
+                'This server build has no /schemes route — rebuild it (`make`) and restart '
+                + '`baguette serve`.',
+                'bad'
+              );
+            }
+            return;
+          }
           this._renderList((body && body.schemes) || []);
         })
         .catch(() => {
@@ -252,10 +267,15 @@
       this._say('Opening…', '');
       const endpoint = `/simulators/${encodeURIComponent(this.udid)}/openurl`
         + `?url=${encodeURIComponent(url)}`;
+      // Read the body as text first and parse defensively: a 404 from an
+      // older server arrives with an empty body, and calling .json() on
+      // that throws — which would land in .catch() and blame the device
+      // for what is really a stale build.
       fetch(endpoint, { method: 'POST' })
-        .then((r) => r.json().then((body) => ({ ok: r.ok, body })))
-        .then(({ ok, body }) => {
-          if (!ok) return this._say((body && body.error) || 'Open failed', 'bad');
+        .then((r) => r.text().then((text) => ({ ok: r.ok, status: r.status, text })))
+        .then(({ ok, status, text }) => {
+          const body = parseJSON(text);
+          if (!ok) return this._say(this._httpError(status, body), 'bad');
           this._remember(url);
           this._renderList([]);
           // A browser-routed link "succeeded" and still didn't reach the
@@ -266,12 +286,38 @@
             this._say(`Opened ${url}`, 'good');
           }
         })
-        .catch(() => this._say('Open failed — is the device still booted?', 'bad'));
+        .catch(() => this._say(
+          'Could not reach the baguette server — is `baguette serve` still running?', 'bad'
+        ));
+    }
+
+    // Turn a failed response into something that points at the actual
+    // cause. The server sends `{"error":…}` for everything it recognises,
+    // so a bodyless 404 means this build predates the route rather than
+    // anything being wrong with the device or the URL.
+    _httpError(status, body) {
+      if (body && body.error) return body.error;
+      if (status === 404) {
+        return 'This server build has no /openurl route — rebuild it (`make`) and restart '
+          + '`baguette serve`.';
+      }
+      return `Open failed (HTTP ${status})`;
     }
 
     _say(text, tone) {
       this.note.textContent = text;
       this.note.className = `dl-note${tone ? ' ' + tone : ''}`;
+    }
+  }
+
+  // Body-or-nothing: error responses from older builds arrive empty, and
+  // a throw here would be reported as a transport failure.
+  function parseJSON(text) {
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return null;
     }
   }
 
