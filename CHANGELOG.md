@@ -10,6 +10,28 @@ For releases prior to this changelog, see the
 
 ## [Unreleased]
 
+### Added
+
+- **`baguette openurl <url>` — open a deep link on the booted simulator.**
+  Dispatches through `xcrun simctl openurl`, but unlike every other tool it
+  says what will actually happen first: an `https://` universal link lands in
+  Safari on the simulator, not in your app, and if an app claims the domain
+  iOS shows an "Open in …?" dialog that needs a tap. `DeepLink.routing`
+  names the two cases so the warning is a modelled behaviour rather than a
+  print statement.
+
+- **`baguette schemes` — list the URL schemes installed apps answer to.**
+  The inventory behind console completion, and useful alone when you know an
+  app handles *something* but not what it's called. `--json` for machine use.
+  Schemes are ranked with an app's own readable scheme ahead of its
+  reverse-DNS and tool-injected (`exp+…`) aliases.
+
+  Reading them takes two steps, because `simctl listapps` reports a curated
+  metadata subset that does **not** include `CFBundleURLTypes`. It does report
+  each app's on-disk `Path`, so schemes come from `<Path>/Info.plist` — which
+  means we never guess CoreSimulator's container layout or its per-install
+  UUIDs.
+
 ---
 
 ## [0.1.82] - 2026-07-20

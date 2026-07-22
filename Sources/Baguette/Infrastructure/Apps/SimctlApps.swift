@@ -73,6 +73,72 @@ final class SimctlApps: Apps, @unchecked Sendable {
         try await install(AppBundle(path: dest.appendingPathComponent(appName)))
     }
 
+    func open(_ link: DeepLink) async throws {
+        let status = try await exitStatus(of: xcrun, arguments: link.openArguments(udid: udid))
+        guard status == 0 else { throw AppsError.openFailed(status: status) }
+    }
+
+    func installed() async throws -> [InstalledApp] {
+        let (status, output) = try await capture(
+            of: xcrun, arguments: ["simctl", "listapps", udid]
+        )
+        guard status == 0 else { throw AppsError.listFailed(status: status) }
+
+        // listapps names the apps but not their URL schemes, so each
+        // app's own Info.plist supplies those. An app whose bundle has
+        // gone missing keeps its roster entry and simply contributes no
+        // completions — one unreadable bundle shouldn't empty the list.
+        return InstalledApp.all(fromListApps: output).map { app in
+            guard let bundle = app.bundlePath,
+                  let plist = try? Data(
+                      contentsOf: bundle.appendingPathComponent("Info.plist")
+                  )
+            else { return app }
+            return app.withSchemes(InstalledApp.schemes(inInfoPlist: plist))
+        }
+    }
+
+    /// Accumulates a child's stdout across arbitrarily-chunked callbacks
+    /// that may land on any queue.
+    private final class ByteBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var bytes = Data()
+
+        func append(_ chunk: Data) {
+            lock.lock(); defer { lock.unlock() }
+            bytes.append(chunk)
+        }
+
+        func collected() -> Data {
+            lock.lock(); defer { lock.unlock() }
+            return bytes
+        }
+    }
+
+    /// Run a one-shot child to completion and hand back its exit status
+    /// *and* everything it wrote. `listapps` answers on stdout rather
+    /// than through its exit code, and its output arrives in whatever
+    /// chunks the pipe delivers — so the bytes are accumulated whole and
+    /// parsed once at exit, never per chunk.
+    private func capture(
+        of executable: URL, arguments: [String]
+    ) async throws -> (Int32, Data) {
+        let buffer = ByteBox()
+        return try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<(Int32, Data), Error>) in
+            do {
+                try subprocess.run(
+                    executable: executable,
+                    arguments: arguments,
+                    onBytes: { buffer.append($0) },
+                    onExit: { continuation.resume(returning: ($0, buffer.collected())) }
+                )
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
     /// Total bytes of regular files under `root` — what the archive
     /// actually inflated to on disk.
     private static func regularFileBytes(under root: URL) -> Int64 {

@@ -26,6 +26,21 @@ protocol Apps: Sendable {
     /// installable is inside, and `.installFailed` when simctl rejects
     /// the located app.
     func install(archive: AppArchive) async throws
+
+    /// Open a deep link on the device — the console's whole point.
+    /// Throws `AppsError.openFailed` when simctl exits non-zero.
+    ///
+    /// Note this reports only whether *dispatch* succeeded. A link with
+    /// `.browser` routing dispatches perfectly happily and then lands in
+    /// Safari, so callers that care (the console does) inspect
+    /// `DeepLink.routing` before calling, rather than expecting a
+    /// failure here.
+    func open(_ link: DeepLink) async throws
+
+    /// The apps on the device and the schemes they answer to — the
+    /// inventory behind console completion. Throws
+    /// `AppsError.listFailed` when simctl exits non-zero.
+    func installed() async throws -> [InstalledApp]
 }
 
 /// Failure modes surfaced when installing an app. Maps to a CLI exit
@@ -36,9 +51,15 @@ enum AppsError: Error, Equatable, CustomStringConvertible {
     case extractFailed(status: Int32)
     case archiveTooLarge(bytes: Int64, limit: Int64)
     case noAppInArchive
+    case openFailed(status: Int32)
+    case listFailed(status: Int32)
 
     var description: String {
         switch self {
+        case .openFailed(let status):
+            return "xcrun simctl openurl exited \(status)"
+        case .listFailed(let status):
+            return "xcrun simctl listapps exited \(status)"
         case .installFailed(let status):
             return "xcrun simctl install exited \(status)"
         case .extractFailed(let status):

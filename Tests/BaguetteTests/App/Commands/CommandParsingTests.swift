@@ -21,8 +21,27 @@ struct CommandParsingTests {
             "key", "type", "paste", "clipboard",
             "chrome", "screenshot", "describe-ui", "logs", "serve",
             "orientation", "status-bar", "location", "install", "add-media",
+            "openurl", "schemes",
             "diag-digitizer-trackpad",
         ])
+    }
+
+    // MARK: - openurl / schemes
+
+    @Test func `openurl parses the url argument`() throws {
+        let cmd = try OpenURLCommand.parse(["--udid", "U", "myapp://profile/42"])
+        #expect(cmd.url == "myapp://profile/42")
+        #expect(OpenURLCommand.configuration.commandName == "openurl")
+    }
+
+    @Test func `openurl requires a url`() {
+        #expect(throws: (any Error).self) { try OpenURLCommand.parse(["--udid", "U"]) }
+    }
+
+    @Test func `schemes parses --udid`() throws {
+        let cmd = try SchemesCommand.parse(["--udid", "U"])
+        #expect(cmd.options.udid == "U")
+        #expect(SchemesCommand.configuration.commandName == "schemes")
     }
 
     @Test func `baguette root exposes version`() {

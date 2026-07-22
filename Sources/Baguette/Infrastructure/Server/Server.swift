@@ -854,7 +854,7 @@ struct Server: Sendable {
             switch error {
             case .extractFailed, .archiveTooLarge, .noAppInArchive:
                 return .badArchive(reason: error.description)
-            case .installFailed:
+            case .installFailed, .openFailed, .listFailed:
                 return .dispatchFailed
             }
         } catch {
