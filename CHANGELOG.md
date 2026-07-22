@@ -32,6 +32,18 @@ For releases prior to this changelog, see the
   means we never guess CoreSimulator's container layout or its per-install
   UUIDs.
 
+- **Deep-link URL bar in `baguette serve`.** A command bar in the focus page's
+  toolbar: type a scheme fragment and it completes against the apps actually
+  installed on the device (`avas-` → `avas-app://`), with inline ghost text
+  plus a suggestion list, `↑`/`↓` history, and `Tab`/`→` to accept. Opening an
+  https link shows the same Safari warning the CLI prints.
+
+  Backed by two routes — `GET /simulators/<udid>/schemes?q=…` and
+  `POST /simulators/<udid>/openurl?url=…`. Ranking and the warning copy both
+  live server-side so the browser keeps no second copy that can drift; the bar
+  itself is a dumb sender. Discovery is debounced and superseded responses are
+  dropped, so typing never waits on the device.
+
 ---
 
 ## [0.1.82] - 2026-07-20

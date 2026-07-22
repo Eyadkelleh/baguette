@@ -38,6 +38,7 @@
   let cameraPanel = null;   // CameraPanel — Mac webcam → /tmp/SimCam.bgra
   let statusBarPanel = null; // StatusBarPanel — simctl status_bar overrides
   let locationPanel = null;  // LocationPanel — simctl location map picker
+  let deepLinkBar = null;    // DeepLinkBar — scheme completion + openurl
   let lastPaintedSize = { w: 0, h: 0 };
   let deviceName = '';
 
@@ -567,6 +568,7 @@
     window.__nativeToggleCamera = () => toggleCamera();
     window.__nativeToggleStatusBar = () => toggleStatusBar();
     window.__nativeToggleLocation = () => toggleLocation();
+    window.__nativeToggleDeepLink = () => toggleDeepLink();
     window.__nativeToggleAx = () => {
       if (!axInspector) return;
       if (axInspector.isEnabled()) axInspector.disable();
@@ -739,6 +741,32 @@
     }
   }
 
+  // Deep-link card — same lazy-mount pattern as the status-bar card.
+  // DeepLinkBar resolves URL schemes off the device and POSTs openurl.
+  // Reopening refocuses the input: the bar is a thing you type into, so
+  // landing anywhere else would just cost a click.
+  function toggleDeepLink() {
+    const view = document.getElementById('simNativeView');
+    const host = document.getElementById('nativeDeepLinkHost');
+    const btn  = document.getElementById('nativeDeepLinkToggle');
+    const open = view && view.getAttribute('data-deeplink') === 'open';
+    if (!view || !host) return;
+    if (open) {
+      view.removeAttribute('data-deeplink');
+      if (btn) btn.classList.remove('active');
+    } else {
+      view.setAttribute('data-deeplink', 'open');
+      if (btn) btn.classList.add('active');
+      if (!deepLinkBar && window.DeepLinkBar && udid) {
+        host.innerHTML = '';
+        deepLinkBar = new window.DeepLinkBar();
+        deepLinkBar.attach(host, udid);
+      } else if (deepLinkBar) {
+        deepLinkBar.focus();
+      }
+    }
+  }
+
   function wireUnload() {
     window.addEventListener('beforeunload', () => {
       try { if (session) session.stop(); } catch (_) { /* ignore */ }
@@ -747,6 +775,7 @@
       try { if (cameraPanel) cameraPanel.detach(); } catch (_) { /* ignore */ }
       try { if (statusBarPanel) statusBarPanel.detach(); } catch (_) { /* ignore */ }
       try { if (locationPanel) locationPanel.detach(); } catch (_) { /* ignore */ }
+      try { if (deepLinkBar) deepLinkBar.detach(); } catch (_) { /* ignore */ }
     });
   }
 

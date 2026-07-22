@@ -141,6 +141,59 @@ struct Server: Sendable {
             }
         }
 
+        // Deep links — the console's two verbs. `POST …/openurl?url=…`
+        // opens a link and reports *where it went*; `GET …/schemes?q=…`
+        // answers ranked completions for what's been typed so far.
+        // Ranking is server-side so the URL bar never keeps its own copy
+        // of the ordering rule. Pure dispatch lives in `Server.openURL` /
+        // `Server.schemes` for unit testing.
+        router.post("/simulators/:udid/openurl") { [simulators] r, _ in
+            if let rejected = rejectUntrustedBrowser(r) { return rejected }
+            let url = r.uri.queryParameters.get("url").map { String($0) } ?? ""
+            switch await Self.openURL(
+                udid: Self.udidParam(r), url: url, simulators: simulators
+            ) {
+            case .opened(let routing):
+                return Response(
+                    status: .ok,
+                    headers: [.contentType: "application/json", .cacheControl: "no-cache"],
+                    body: .init(byteBuffer: ByteBuffer(
+                        string: Self.openedJSONString(routing: routing)
+                    ))
+                )
+            case .notAURL:
+                return errorJSON(
+                    "not a URL (expected a scheme, e.g. myapp://path)", status: .badRequest
+                )
+            case .unknownDevice:
+                return errorJSON("unknown udid: \(Self.udidParam(r))", status: .notFound)
+            case .dispatchFailed:
+                return errorJSON("xcrun simctl openurl failed", status: .internalServerError)
+            }
+        }
+        router.get("/simulators/:udid/schemes") { [simulators] r, _ in
+            if let rejected = rejectUntrustedBrowser(r) { return rejected }
+            let query = r.uri.queryParameters.get("q").map { String($0) } ?? ""
+            switch await Self.schemes(
+                udid: Self.udidParam(r), query: query, simulators: simulators
+            ) {
+            case .ok(let suggestions):
+                return Response(
+                    status: .ok,
+                    headers: [.contentType: "application/json", .cacheControl: "no-cache"],
+                    body: .init(byteBuffer: ByteBuffer(
+                        string: Self.schemesJSONString(suggestions)
+                    ))
+                )
+            case .unknownDevice:
+                return errorJSON("unknown udid: \(Self.udidParam(r))", status: .notFound)
+            case .listFailed:
+                return errorJSON(
+                    "xcrun simctl listapps failed", status: .internalServerError
+                )
+            }
+        }
+
         // Status bar — `POST` sets overrides from a JSON body,
         // `DELETE` clears them. Backed by `simctl status_bar`; pure
         // parse + dispatch lives in `Server.applyStatusBar` /
@@ -557,6 +610,101 @@ struct Server: Sendable {
             return .unknownDevice
         }
         return sim.orientation().set(orientation) ? .ok : .dispatchFailed
+    }
+
+    /// Outcome of the console's openurl route. `.opened` carries
+    /// **where the link went**, not merely that dispatch worked: an
+    /// https link dispatches happily and then lands in Safari, so a bare
+    /// "ok" would be a lie the URL bar repeats back to the developer.
+    enum OpenURLOutcome: Equatable {
+        case opened(routing: DeepLink.Routing)
+        case notAURL
+        case unknownDevice
+        case dispatchFailed
+    }
+
+    /// Parse the typed text, look up the device, open the link. Split
+    /// out from the route closure so unit tests can drive every branch
+    /// (`MockSimulators` + `MockApps`) without booting Hummingbird.
+    static func openURL(
+        udid: String,
+        url: String,
+        simulators: any Simulators
+    ) async -> OpenURLOutcome {
+        guard let link = DeepLink.from(url) else { return .notAURL }
+        guard !udid.isEmpty, let sim = simulators.find(udid: udid) else {
+            return .unknownDevice
+        }
+        do {
+            try await sim.apps().open(link)
+        } catch {
+            return .dispatchFailed
+        }
+        return .opened(routing: link.routing)
+    }
+
+    /// Outcome of the console's scheme-completion route.
+    enum SchemesOutcome: Equatable {
+        case ok([SchemeSuggestion])
+        case unknownDevice
+        case listFailed
+    }
+
+    /// The completion inventory for what's been typed so far. Ranking
+    /// happens here rather than in the browser so there's one ordering
+    /// rule, tested once, instead of a JS copy that drifts.
+    static func schemes(
+        udid: String,
+        query: String,
+        simulators: any Simulators
+    ) async -> SchemesOutcome {
+        guard !udid.isEmpty, let sim = simulators.find(udid: udid) else {
+            return .unknownDevice
+        }
+        do {
+            let installed = try await sim.apps().installed()
+            return .ok(SchemeSuggestion.matching(query, in: installed))
+        } catch {
+            return .listFailed
+        }
+    }
+
+    /// What the browser gets back from a successful open. The warning
+    /// copy lives here rather than in the JS so there's one explanation
+    /// of the Safari fallback, not a server copy and a drifting client
+    /// copy.
+    static func openedJSONString(routing: DeepLink.Routing) -> String {
+        switch routing {
+        case .app:
+            return #"{"ok":true,"routing":"app"}"#
+        case .browser:
+            let warning = "This lands in Safari on the simulator, not your app. "
+                + "If an app claims the domain, iOS shows an \"Open in …?\" dialog "
+                + "that needs a tap, so it never completes unattended. "
+                + "Use the app's own scheme for an automated check."
+            let encoded = (try? JSONSerialization.data(
+                withJSONObject: ["ok": true, "routing": "browser", "warning": warning],
+                options: [.sortedKeys]
+            )).map { String(decoding: $0, as: UTF8.self) }
+            return encoded ?? #"{"ok":true,"routing":"browser"}"#
+        }
+    }
+
+    /// The completion inventory as the URL bar consumes it — one row per
+    /// suggestion, already ranked, carrying everything a row renders.
+    static func schemesJSONString(_ suggestions: [SchemeSuggestion]) -> String {
+        let rows = suggestions.map {
+            [
+                "scheme": $0.scheme,
+                "completion": $0.completion,
+                "app": $0.appName,
+                "bundleId": $0.bundleIdentifier,
+            ]
+        }
+        let encoded = (try? JSONSerialization.data(
+            withJSONObject: ["schemes": rows], options: [.sortedKeys]
+        )).map { String(decoding: $0, as: UTF8.self) }
+        return encoded ?? #"{"schemes":[]}"#
     }
 
     /// Outcome of the status-bar routes — one case per HTTP-status
